@@ -59,7 +59,8 @@ export async function generateImage(id: string, prompt: string): Promise<Buffer>
   return new Promise<Buffer>((resolve, reject) => {
     queue.push(async () => {
       try {
-        const res = await fetchWithRetry(`https://api-inference.huggingface.co/models/${MODEL}`, {
+        // Using router.huggingface.co/hf-inference to bypass regional ISP DNS blocks
+        const res = await fetchWithRetry(`https://router.huggingface.co/hf-inference/models/${MODEL}`, {
           method: "POST",
           headers: { 
             "Content-Type": "application/json",
