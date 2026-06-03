@@ -57,9 +57,9 @@ function scoreTextAlignment(prompt: string, challengeId: string): number {
 
   const matched = referenceTokens.filter((token) => promptTokens.has(token)).length;
   const ratio = matched / referenceTokens.length;
-  // If they match just a third of the reference words in their 60 seconds, give them max score
-  const adjustedRatio = Math.min(ratio * 3, 1.0);
-  return clamp(Math.round(70 + adjustedRatio * 30), 50, 100);
+  // If they match just a quarter of the reference words in their 60 seconds, give them max score
+  const adjustedRatio = Math.min(ratio * 4, 1.0);
+  return clamp(Math.round(10 + adjustedRatio * 90), 10, 100);
 }
 
 function getOrientationRule(prompt: string): string {
@@ -214,7 +214,7 @@ export function scorePrompt(
   const orientationBonus =
     orientationRule.includes("face right") || orientationRule.includes("face left") ? 8 : 0;
 
-  const heuristicSimilarity = clamp(textSimilarity + orientationBonus, 50, 100);
+  const heuristicSimilarity = clamp(textSimilarity + orientationBonus, 10, 100);
   const similarity = clamp(
     Math.round(
       options?.imageSimilarity !== undefined
@@ -226,20 +226,24 @@ export function scorePrompt(
     100,
   );
 
-  const promptQuality = clamp(Math.round(70 + richness * 0.3 + technicalHits * 5), 50, 100);
+  // Severe penalty if they are describing the completely wrong thing (e.g. a dog instead of a car)
+  // We scale down ALL their other scores if their heuristicSimilarity is below 80.
+  const relevance = clamp((heuristicSimilarity - 10) / 70, 0.1, 1.0);
+
+  const promptQuality = clamp(Math.round((20 + richness * 0.8 + technicalHits * 20) * relevance), 5, 100);
   const styleAlignment = clamp(
-    Math.round(75 + cinematicHits * 8 + (challenge.category === "hard" ? 5 : 0)),
-    50,
+    Math.round((20 + cinematicHits * 40 + (challenge.category === "hard" ? 10 : 0)) * relevance),
+    5,
     100,
   );
-  const detailCoverage = clamp(Math.round(70 + Math.min(tokenCount / 15, 1.0) * 30), 50, 100);
+  const detailCoverage = clamp(Math.round((20 + Math.min(tokenCount / 15, 1.0) * 80) * relevance), 5, 100);
 
   const finalScore = clamp(
     Math.round(
-      similarity * 0.5 +
-        promptQuality * 0.2 +
-        styleAlignment * 0.2 +
-        detailCoverage * 0.1,
+      similarity * 0.6 +
+        promptQuality * 0.15 +
+        styleAlignment * 0.1 +
+        detailCoverage * 0.15,
     ),
     0,
     100,
