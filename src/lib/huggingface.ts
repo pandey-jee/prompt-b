@@ -1,7 +1,7 @@
 import { Jimp } from "jimp";
 
 const API_KEY = process.env.HF_API_KEY ?? "";
-const MODEL = "stabilityai/stable-diffusion-xl-base-1.0";
+const MODEL = "black-forest-labs/FLUX.1-schnell";
 
 // In-memory cache for generated images.
 // Key: submissionId, Value: Image Buffer OR Error
