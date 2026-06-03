@@ -225,6 +225,7 @@ export function isSessionAtCapacity(sessionId?: string) {
 }
 
 export function createPendingSubmission(input: {
+  id?: string;
   sessionId?: string;
   playerName: string;
   prompt: string;
@@ -262,7 +263,7 @@ export function createPendingSubmission(input: {
   }
 
   const submission: PlayerSubmission = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: input.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     sessionId: session.id,
     playerName: input.playerName,
     prompt: input.prompt,
@@ -300,4 +301,66 @@ export function finalizePendingSubmission(id: string, sessionId?: string) {
   }
 
   return null;
+}
+
+export function updatePendingSubmissionScore(
+  id: string,
+  imageSimilarity: number,
+  sessionId?: string,
+): boolean {
+  const targetSessions = sessionId ? [ensureSession(sessionId)] : getAllSessions();
+
+  for (const session of targetSessions) {
+    const submission = session.pendingSubmissions.find((s) => s.id === id);
+    if (submission) {
+      const newScores = scorePrompt(submission.prompt, submission.challenge, { imageSimilarity });
+      submission.scores = newScores;
+      submission.persona = getPromptPersona(submission.prompt, newScores.finalScore);
+      persistStore();
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Called by the background Stable Horde task once the image is generated.
+ * Updates both the generatedImageUrl and recalculates scores with imageSimilarity.
+ * Searches BOTH pendingSubmissions AND finalized submissions so it works
+ * regardless of whether the user has already completed the survey.
+ */
+export function updatePendingSubmissionImageAndScore(
+  id: string,
+  generatedImageUrl: string,
+  imageSimilarity: number,
+  sessionId?: string,
+): boolean {
+  const targetSessions = sessionId ? [ensureSession(sessionId)] : getAllSessions();
+
+  for (const session of targetSessions) {
+    // Check pending first
+    const pending = session.pendingSubmissions.find((s) => s.id === id);
+    if (pending) {
+      pending.generatedImageUrl = generatedImageUrl;
+      const newScores = scorePrompt(pending.prompt, pending.challenge, { imageSimilarity });
+      pending.scores = newScores;
+      pending.persona = getPromptPersona(pending.prompt, newScores.finalScore);
+      persistStore();
+      return true;
+    }
+
+    // Also check finalized — user may have completed survey before image was ready
+    const finalized = session.submissions.find((s) => s.id === id);
+    if (finalized) {
+      finalized.generatedImageUrl = generatedImageUrl;
+      const newScores = scorePrompt(finalized.prompt, finalized.challenge, { imageSimilarity });
+      finalized.scores = newScores;
+      finalized.persona = getPromptPersona(finalized.prompt, newScores.finalScore);
+      persistStore();
+      return true;
+    }
+  }
+
+  return false;
 }

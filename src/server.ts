@@ -2,7 +2,8 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 import { createGeneratedImageUrl } from "./lib/engine";
-import { compareImageUrls } from "./lib/imageSimilarity";
+import { compareTargetUrlWithBuffer } from "./lib/imageSimilarity";
+import { generateImage, getCachedImage } from "./lib/huggingface";
 import { getFeedbackEntries, saveFeedback, saveSubmissionEvent } from "./lib/feedback";
 import {
   createSession,
@@ -20,6 +21,8 @@ import {
   getSubmissions,
   isSessionAtCapacity,
   rotateChallenge,
+  updatePendingSubmissionScore,
+  updatePendingSubmissionImageAndScore,
 } from "./lib/store";
 import { SurveyFeedback } from "./lib/types";
 
@@ -27,6 +30,11 @@ const app = express();
 const port = Number(process.env.PORT ?? 4000);
 const frontendUrl =
   process.env.FRONTEND_URL ?? "https://prompt-war-six.vercel.app";
+// Backend's own public URL — used to build /api/image/:id URLs
+const backendUrl =
+  process.env.RENDER_EXTERNAL_URL ??
+  process.env.BACKEND_URL ??
+  `http://localhost:${port}`;
 
 const allowedOrigins = new Set([
   frontendUrl,
@@ -92,6 +100,24 @@ function getSessionIdFromRequest(req: express.Request): string | undefined {
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
+});
+
+// ── Serve Stable Horde / Hugging Face generated images ─────────────────────────────────────
+app.get("/api/image/:id", (req, res) => {
+  try {
+    const buffer = getCachedImage(req.params.id);
+    if (!buffer) {
+      // Image not yet generated — client can retry
+      res.status(202).json({ message: "Image is still being generated, try again shortly." });
+      return;
+    }
+    res.set("Content-Type", "image/png");
+    res.set("Cache-Control", "public, max-age=3600");
+    res.send(buffer);
+  } catch (err) {
+    // Generation permanently failed (e.g. invalid API key)
+    res.status(500).json({ message: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 app.post("/api/session", (req, res) => {
@@ -187,9 +213,6 @@ app.post("/api/submit", async (req, res) => {
       return;
     }
 
-    // Allow empty or short prompts when this request was triggered by the
-    // client's auto-submit (timer). In that case we accept the submission
-    // and later mark the score as zero. For manual submits, enforce length.
     if (!prompt && !autoSubmitted) {
       res.status(400).json({ message: "prompt is required." });
       return;
@@ -201,28 +224,20 @@ app.post("/api/submit", async (req, res) => {
     }
 
     const challenge = getCurrentChallenge(sessionId);
-    const generatedImageUrl = toAbsoluteUrl(createGeneratedImageUrl(prompt, challenge.id));
 
-    let imageSimilarity: number | undefined = undefined;
-    if (shouldRunImageSimilarity()) {
-      try {
-        logMemory("before-compare");
-        imageSimilarity = await compareImageUrls(
-          toAbsoluteUrl(challenge.imageUrl),
-          generatedImageUrl,
-        );
-        logMemory(`after-compare score=${imageSimilarity}`);
-      } catch {
-        imageSimilarity = undefined;
-      }
-    }
+    // Pre-generate the submission ID so we can build the final image URL
+    // BEFORE creating the submission — no placeholder that could break the result page.
+    const submissionId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const imageUrl = `${backendUrl}/api/image/${submissionId}`;
 
+    // Create pending submission immediately with text-only scores
     const pending = createPendingSubmission({
+      id: submissionId,
       sessionId,
       playerName,
       prompt,
-      generatedImageUrl,
-      imageSimilarity,
+      generatedImageUrl: imageUrl,
+      imageSimilarity: undefined,
       forceZeroScore: autoSubmitted && !prompt,
     });
 
@@ -244,11 +259,46 @@ app.post("/api/submit", async (req, res) => {
       console.error("saveSubmissionEvent failed", error);
     }
 
+    // ── Respond immediately ─────────────────────────────────────────────────
     res.status(201).json({
       pendingId: pending.id,
       sessionId: summary.sessionId,
       surveyUrl: `/survey/${pending.id}?sessionId=${encodeURIComponent(summary.sessionId)}`,
     });
+
+    // ── Background: generate image + compare (non-blocking) ─────────────────
+    // Stable Horde distributes load across many volunteer GPU workers.
+    // By the time the user finishes the survey (30–60 s) the image is ready.
+    if (prompt) {
+      void (async () => {
+        try {
+          logMemory("before-generate");
+          const imageBuffer = await generateImage(pending.id, prompt);
+          const actualImageUrl = `${backendUrl}/api/image/${pending.id}`;
+
+          // Compare generated image with the challenge reference image
+          let imageSimilarity: number | undefined;
+          try {
+            imageSimilarity = await compareTargetUrlWithBuffer(
+              toAbsoluteUrl(challenge.imageUrl),
+              imageBuffer,
+            );
+          } catch (compErr) {
+            console.warn("Image comparison failed — text-only score kept", compErr);
+          }
+
+          updatePendingSubmissionImageAndScore(
+            pending.id,
+            actualImageUrl,
+            imageSimilarity ?? 0,
+            sessionId,
+          );
+          logMemory(`after-generate score=${imageSimilarity}`);
+        } catch (err) {
+          console.warn("Stable Horde generation failed — text-only score kept", err);
+        }
+      })();
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to submit prompt.";
     res.status(500).json({ message });
