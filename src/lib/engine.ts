@@ -57,7 +57,9 @@ function scoreTextAlignment(prompt: string, challengeId: string): number {
 
   const matched = referenceTokens.filter((token) => promptTokens.has(token)).length;
   const ratio = matched / referenceTokens.length;
-  return clamp(Math.round(45 + ratio * 55), 30, 99);
+  // If they match just a third of the reference words in their 60 seconds, give them max score
+  const adjustedRatio = Math.min(ratio * 3, 1.0);
+  return clamp(Math.round(70 + adjustedRatio * 30), 50, 100);
 }
 
 function getOrientationRule(prompt: string): string {
@@ -203,38 +205,44 @@ export function scorePrompt(
   const cinematicHits = cinematicTerms.filter((t) => text.includes(t)).length;
   const technicalHits = technicalTerms.filter((t) => text.includes(t)).length;
   
-  // Heavily penalize short prompts to force players to write more text
-  const richness = tokenCount < 10 
+  // Heavily penalize 1-3 word prompts, but max out around 18 words (realistic for 60 seconds)
+  const richness = tokenCount < 4 
     ? 0 
-    : clamp(Math.round((tokenCount / 60) * 100), 10, 100);
+    : clamp(Math.round((tokenCount / 18) * 100), 20, 100);
   const textSimilarity = scoreTextAlignment(prompt, challenge.id);
   const orientationRule = getOrientationRule(prompt);
   const orientationBonus =
-    orientationRule.includes("face right") || orientationRule.includes("face left") ? 6 : 0;
+    orientationRule.includes("face right") || orientationRule.includes("face left") ? 8 : 0;
 
-  const heuristicSimilarity = clamp(textSimilarity + orientationBonus, 35, 99);
+  const heuristicSimilarity = clamp(textSimilarity + orientationBonus, 50, 100);
   const similarity = clamp(
     Math.round(
       options?.imageSimilarity !== undefined
-        ? options.imageSimilarity * 0.7 + heuristicSimilarity * 0.3
+        // Decrease image similarity weight because pixel MSE is overly harsh on AI generations
+        ? options.imageSimilarity * 0.2 + heuristicSimilarity * 0.8
         : heuristicSimilarity,
     ),
     0,
     100,
   );
-  const promptQuality = clamp(Math.round(40 + richness * 0.55 + technicalHits * 2), 35, 99);
-  const styleAlignment = clamp(
-    Math.round(45 + cinematicHits * 6 + (challenge.category === "hard" ? 5 : 0)),
-    35,
-    99,
-  );
-  const detailCoverage = clamp(Math.round(35 + tokenCount * 1.2 + technicalHits * 4), 20, 99);
 
-  const finalScore = Math.round(
-    similarity * 0.5 +
-      promptQuality * 0.2 +
-      styleAlignment * 0.2 +
-      detailCoverage * 0.1,
+  const promptQuality = clamp(Math.round(70 + richness * 0.3 + technicalHits * 5), 50, 100);
+  const styleAlignment = clamp(
+    Math.round(75 + cinematicHits * 8 + (challenge.category === "hard" ? 5 : 0)),
+    50,
+    100,
+  );
+  const detailCoverage = clamp(Math.round(70 + Math.min(tokenCount / 15, 1.0) * 30), 50, 100);
+
+  const finalScore = clamp(
+    Math.round(
+      similarity * 0.5 +
+        promptQuality * 0.2 +
+        styleAlignment * 0.2 +
+        detailCoverage * 0.1,
+    ),
+    0,
+    100,
   );
 
   return {
