@@ -38,12 +38,23 @@ const CHALLENGE_REFERENCE_PROMPTS: Record<string, string> = {
     "Cinematic ultra-realistic modified metallic gray Volkswagen GTI concept race car on a wet racetrack at stormy night, dramatic low-angle front three-quarter perspective facing slightly right, aggressive aero body kit, glowing red LED arrow lights in background, strong volumetric lighting, glossy reflective asphalt, high-end futuristic automotive advertisement look.",
 };
 
-function tokenize(value: string): string[] {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, " ")
+const STOP_WORDS = new Set(["the", "and", "with", "for", "that", "this", "from", "then", "are", "was"]);
+
+function tokenize(text: string): string[] {
+  const normalized = text.toLowerCase().replace(/[^\w\s]/g, "");
+  
+  // Inject common synonyms so mobile players aren't punished for generic terms
+  const withSynonyms = normalized
+    .replace(/\b(car|auto|vehicle)\b/g, "hatchback")
+    .replace(/\b(puppy|hound)\b/g, "dog")
+    .replace(/\b(ocean|sea|water|beach)\b/g, "coastal")
+    .replace(/\b(mountain|hill)\b/g, "mountains")
+    .replace(/\b(road|street)\b/g, "asphalt")
+    .replace(/\b(sun|sunset|sunrise)\b/g, "golden");
+
+  return withSynonyms
     .split(/\s+/)
-    .filter((token) => token.length > 2);
+    .filter((token) => token.length > 2 && !STOP_WORDS.has(token));
 }
 
 function scoreTextAlignment(prompt: string, challengeId: string): number {
@@ -57,8 +68,8 @@ function scoreTextAlignment(prompt: string, challengeId: string): number {
 
   const matched = referenceTokens.filter((token) => promptTokens.has(token)).length;
   const ratio = matched / referenceTokens.length;
-  // If they match just a quarter of the reference words in their 60 seconds, give them max score
-  const adjustedRatio = Math.min(ratio * 4, 1.0);
+  // Make it extremely lenient: matching just 1/10th of the words (~3 keywords) gives full similarity
+  const adjustedRatio = Math.min(ratio * 10, 1.0);
   return clamp(Math.round(10 + adjustedRatio * 90), 10, 100);
 }
 
@@ -227,8 +238,8 @@ export function scorePrompt(
   );
 
   // Severe penalty if they are describing the completely wrong thing (e.g. a dog instead of a car)
-  // We scale down ALL their other scores if their heuristicSimilarity is below 80.
-  const relevance = clamp((heuristicSimilarity - 10) / 70, 0.1, 1.0);
+  // We scale down ALL their other scores if their heuristicSimilarity is below 70.
+  const relevance = clamp((heuristicSimilarity - 10) / 60, 0.1, 1.0);
 
   const promptQuality = clamp(Math.round((20 + richness * 0.8 + technicalHits * 20) * relevance), 5, 100);
   const styleAlignment = clamp(
