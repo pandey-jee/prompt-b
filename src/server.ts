@@ -23,7 +23,9 @@ import {
   rotateChallenge,
   updatePendingSubmissionScore,
   updatePendingSubmissionImageAndScore,
+  overrideStore,
 } from "./lib/store";
+import { loadStoreFromDatabase } from "./lib/persistence";
 import { SurveyFeedback } from "./lib/types";
 
 const app = express();
@@ -493,8 +495,20 @@ function logMemory(label: string) {
   );
 }
 
-app.listen(port, () => {
-  console.log(`Prompt Wars backend running on http://localhost:${port}`);
-  logMemory("startup");
-  setInterval(() => logMemory("heartbeat"), 60_000);
-});
+async function startServer() {
+  const dbStore = await loadStoreFromDatabase();
+  if (dbStore) {
+    overrideStore(dbStore);
+    console.log("Successfully loaded game state from Neon DB.");
+  } else {
+    console.log("No existing game state found in DB, starting fresh.");
+  }
+
+  app.listen(port, () => {
+    console.log(`Prompt Wars backend running on http://localhost:${port}`);
+    logMemory("startup");
+    setInterval(() => logMemory("heartbeat"), 60_000);
+  });
+}
+
+startServer().catch((err) => console.error("Failed to start server:", err));

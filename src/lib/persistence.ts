@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { getPool } from "./feedback";
 import { PlayerSubmission } from "./types";
 
 export const DEFAULT_SESSION_ID = "main";
@@ -178,4 +179,82 @@ export function saveStoreToDisk(store: PromptWarsStore) {
   }
 
   renameSync(TEMP_FILE, DATA_FILE);
+}
+
+// === DATABASE PERSISTENCE ===
+
+let gameStateTableReady = false;
+
+async function ensureGameStateTable() {
+  if (gameStateTableReady) return;
+  const client = await getPool().connect();
+  try {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS game_state (
+        id INT PRIMARY KEY,
+        state JSONB NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    gameStateTableReady = true;
+  } finally {
+    client.release();
+  }
+}
+
+export async function loadStoreFromDatabase(): Promise<PromptWarsStore | null> {
+  try {
+    if (!process.env.DATABASE_URL) return null;
+    await ensureGameStateTable();
+    
+    const result = await getPool().query(`SELECT state FROM game_state WHERE id = 1`);
+    if (result.rows.length === 0) return null;
+    
+    const parsed = result.rows[0].state;
+    
+    if (isLegacyStoreShape(parsed)) {
+      return migrateLegacyStore(parsed);
+    }
+    
+    if (!isStoreShape(parsed)) {
+      return null;
+    }
+    
+    const normalizedSessions = Object.entries(parsed.sessions)
+      .map(([id, session]) => [id, normalizeSession(id, session)] as const)
+      .filter(([, session]) => session !== null);
+
+    if (normalizedSessions.length === 0) {
+      return null;
+    }
+
+    const sessions = Object.fromEntries(normalizedSessions) as Record<string, PromptWarsSessionStore>;
+    const defaultSessionId = sessions[parsed.defaultSessionId]
+      ? parsed.defaultSessionId
+      : Object.keys(sessions)[0];
+
+    return {
+      defaultSessionId,
+      sessions,
+    };
+  } catch (error) {
+    console.error("Failed to load store from Postgres:", error);
+    return null;
+  }
+}
+
+export async function saveStoreToDatabase(store: PromptWarsStore) {
+  try {
+    if (!process.env.DATABASE_URL) return;
+    await ensureGameStateTable();
+    
+    await getPool().query(
+      `INSERT INTO game_state (id, state, updated_at) 
+       VALUES (1, $1, NOW()) 
+       ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()`,
+      [JSON.stringify(store)]
+    );
+  } catch (error) {
+    console.error("Failed to save store to Postgres:", error);
+  }
 }

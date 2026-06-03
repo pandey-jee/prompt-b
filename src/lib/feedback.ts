@@ -51,7 +51,7 @@ function resolveDatabaseUrl(): string | undefined {
   return localUrl || fallbackUrl;
 }
 
-function getPool() {
+export function getPool() {
   const databaseUrl = resolveDatabaseUrl();
   if (!databaseUrl) {
     throw new Error(

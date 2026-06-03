@@ -6,6 +6,7 @@ import {
   PromptWarsSessionStore,
   PromptWarsStore,
   saveStoreToDisk,
+  saveStoreToDatabase,
 } from "./persistence";
 import { PlayerSubmission } from "./types";
 
@@ -25,6 +26,11 @@ if (!globalThis.__promptWarsStore) {
 
 function persistStore() {
   saveStoreToDisk(store);
+  saveStoreToDatabase(store).catch((err) => console.error("DB persist error:", err));
+}
+
+export function overrideStore(newStore: PromptWarsStore) {
+  Object.assign(store, newStore);
 }
 
 function sanitizeSessionId(sessionId?: string) {
