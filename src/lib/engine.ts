@@ -202,7 +202,11 @@ export function scorePrompt(
 
   const cinematicHits = cinematicTerms.filter((t) => text.includes(t)).length;
   const technicalHits = technicalTerms.filter((t) => text.includes(t)).length;
-  const richness = clamp(Math.round((tokenCount / 45) * 100), 20, 100);
+  
+  // Heavily penalize short prompts to force players to write more text
+  const richness = tokenCount < 10 
+    ? 0 
+    : clamp(Math.round((tokenCount / 60) * 100), 10, 100);
   const textSimilarity = scoreTextAlignment(prompt, challenge.id);
   const orientationRule = getOrientationRule(prompt);
   const orientationBonus =
