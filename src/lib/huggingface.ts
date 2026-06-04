@@ -51,6 +51,16 @@ async function fetchWithRetry(url: string, options: RequestInit, retries = 20): 
   return fetch(url, options);
 }
 
+async function fetchPollinationsFallback(prompt: string): Promise<Buffer> {
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=576&nologo=true&enhance=false`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Pollinations API error ${res.status}`);
+  }
+  const arrayBuffer = await res.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
 export async function generateImage(id: string, prompt: string): Promise<Buffer> {
   if (!API_KEY) {
     throw new Error("HF_API_KEY is missing in environment variables.");
@@ -59,24 +69,30 @@ export async function generateImage(id: string, prompt: string): Promise<Buffer>
   return new Promise<Buffer>((resolve, reject) => {
     queue.push(async () => {
       try {
-        // Using router.huggingface.co/hf-inference to bypass regional ISP DNS blocks
-        const res = await fetchWithRetry(`https://router.huggingface.co/hf-inference/models/${MODEL}`, {
-          method: "POST",
-          headers: { 
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${API_KEY}`
-          },
-          body: JSON.stringify({ inputs: prompt })
-        });
+        let buffer: Buffer;
+        try {
+          // Using router.huggingface.co/hf-inference to bypass regional ISP DNS blocks
+          const res = await fetchWithRetry(`https://router.huggingface.co/hf-inference/models/${MODEL}`, {
+            method: "POST",
+            headers: { 
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${API_KEY}`
+            },
+            body: JSON.stringify({ inputs: prompt })
+          });
 
-        if (!res.ok) {
-          const errText = await res.text();
-          throw new Error(`Hugging Face API error ${res.status}: ${errText}`);
+          if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`Hugging Face API error ${res.status}: ${errText}`);
+          }
+
+          // Hugging Face Inference API returns raw image bytes
+          const arrayBuffer = await res.arrayBuffer();
+          buffer = Buffer.from(arrayBuffer);
+        } catch (hfError) {
+          console.warn(`[HF] Failed to generate image, falling back to Pollinations... Error: ${hfError}`);
+          buffer = await fetchPollinationsFallback(prompt);
         }
-
-        // Hugging Face Inference API returns raw image bytes
-        const arrayBuffer = await res.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
         
         // Cache the buffer in memory
         imageCache.set(id, buffer);
