@@ -10,7 +10,7 @@ import {
 } from "./persistence";
 import { PlayerSubmission } from "./types";
 
-const CHALLENGE_ROTATION_MS = 10 * 60 * 1000;
+const CHALLENGE_ROTATION_MS = 20 * 60 * 1000;
 const SESSION_WINDOW_MS = 20 * 60 * 1000;
 
 declare global {
